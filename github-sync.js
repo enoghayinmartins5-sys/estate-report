@@ -39,6 +39,31 @@ class GitHubSync {
     }
 
     /**
+     * UTF-8 safe base64 encode (btoa alone breaks on characters like ₦, accented names, etc.)
+     */
+    encodeBase64(str) {
+        const bytes = new TextEncoder().encode(str);
+        let binary = '';
+        const chunkSize = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+        }
+        return btoa(binary);
+    }
+
+    /**
+     * UTF-8 safe base64 decode
+     */
+    decodeBase64(b64) {
+        const binary = atob(b64.replace(/\n/g, ''));
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+        return new TextDecoder('utf-8').decode(bytes);
+    }
+
+    /**
      * Get current file SHA from GitHub (needed for updates)
      */
     async getFileSHA() {
@@ -96,7 +121,7 @@ class GitHubSync {
             }
 
             const data = await response.json();
-            const content = atob(data.content.replace(/\n/g, ''));
+            const content = this.decodeBase64(data.content);
             const reports = JSON.parse(content);
             
             this.lastSync = new Date().toISOString();
@@ -117,56 +142,64 @@ class GitHubSync {
             throw new Error('GitHub sync not configured or disabled');
         }
 
-        try {
-            // Get current file SHA
-            const sha = await this.getFileSHA();
-            
-            // Encode content to base64
-            const content = btoa(JSON.stringify(reports, null, 2));
-            
-            // Prepare commit data
-            const commitData = {
-                message: commitMessage,
-                content: content,
-                branch: this.branch,
-                committer: {
-                    name: this.userName,
-                    email: this.userEmail
+        // Encode content to base64 (UTF-8 safe — handles ₦, accented characters, etc.)
+        const content = this.encodeBase64(JSON.stringify(reports, null, 2));
+
+        // Try up to 2 times to handle SHA conflicts (409) when another device pushes concurrently
+        for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+                // Get current file SHA (fresh each attempt so retries pick up latest)
+                const sha = await this.getFileSHA();
+
+                const commitData = {
+                    message: commitMessage,
+                    content: content,
+                    branch: this.branch,
+                    committer: {
+                        name: this.userName,
+                        email: this.userEmail
+                    }
+                };
+
+                if (sha) {
+                    commitData.sha = sha;
                 }
-            };
 
-            // Add SHA if file exists
-            if (sha) {
-                commitData.sha = sha;
-            }
+                const response = await fetch(
+                    `https://api.github.com/repos/${this.owner}/${this.repo}/contents/${this.filePath}`,
+                    {
+                        method: 'PUT',
+                        headers: {
+                            'Authorization': `Bearer ${this.token}`,
+                            'Accept': 'application/vnd.github.v3+json',
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(commitData)
+                    }
+                );
 
-            // Push to GitHub
-            const response = await fetch(
-                `https://api.github.com/repos/${this.owner}/${this.repo}/contents/${this.filePath}`,
-                {
-                    method: 'PUT',
-                    headers: {
-                        'Authorization': `Bearer ${this.token}`,
-                        'Accept': 'application/vnd.github.v3+json',
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(commitData)
+                if (!response.ok) {
+                    const error = await response.json();
+                    // 409 = SHA conflict; retry once with a refreshed SHA
+                    if (response.status === 409 && attempt === 0) {
+                        continue;
+                    }
+                    throw new Error(`GitHub API error: ${response.status} - ${error.message}`);
                 }
-            );
 
-            if (!response.ok) {
-                const error = await response.json();
-                throw new Error(`GitHub API error: ${response.status} - ${error.message}`);
+                const result = await response.json();
+                this.lastSync = new Date().toISOString();
+                localStorage.setItem('last_sync_time', this.lastSync);
+
+                return result;
+            } catch (error) {
+                if (attempt === 0) {
+                    console.warn('Push attempt failed, retrying:', error.message);
+                    continue;
+                }
+                console.error('Error pushing to GitHub:', error);
+                throw error;
             }
-
-            const result = await response.json();
-            this.lastSync = new Date().toISOString();
-            localStorage.setItem('last_sync_time', this.lastSync);
-            
-            return result;
-        } catch (error) {
-            console.error('Error pushing to GitHub:', error);
-            throw error;
         }
     }
 
