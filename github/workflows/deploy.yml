@@ -1,0 +1,72 @@
+name: Deploy to GitHub Pages
+
+# Continuous Deployment
+# ---------------------
+# This workflow automatically publishes the website to GitHub Pages
+# every time a change is pushed (or merged) to the `main` branch.
+# Any staff member with write access whose changes land on `main`
+# will see them go live within a minute or two — no manual steps.
+
+on:
+  # Deploy automatically on every push to main (including merged PRs)
+  push:
+    branches:
+      - main
+  # Allow deploying manually from the Actions tab if ever needed
+  workflow_dispatch:
+
+# Permissions required by the official GitHub Pages deploy actions
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Ensure only one deployment runs at a time. If several pushes happen
+# close together, the newest one wins (older in-progress runs are cancelled).
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  # 1) Basic validation so a broken commit does not go live silently
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate reports.json is valid JSON
+        run: |
+          if [ -f reports.json ]; then
+            python3 -c "import json,sys; json.load(open('reports.json')); print('reports.json is valid JSON')"
+          else
+            echo "reports.json not found — skipping JSON validation"
+          fi
+
+      - name: Confirm index.html exists
+        run: |
+          test -f index.html && echo "index.html found" || (echo "index.html is missing!" && exit 1)
+
+  # 2) Build the Pages artifact and deploy it
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload site as Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # Publish the whole repository root (static site)
+          path: "."
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
