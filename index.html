@@ -8,6 +8,7 @@ e<!DOCTYPE html>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="github-sync.js"></script>
     <style>
         :root {
             --primary: #1e40af;
@@ -1097,6 +1098,9 @@ e<!DOCTYPE html>
                 </div>
                 <div class="nav-section">
                     <div class="nav-section-title">System</div>
+                    <button class="nav-item" data-page="settings" onclick="navigateTo('settings')">
+                        <i class="fas fa-cog"></i> Settings & Sync
+                    </button>
                     <button class="nav-item" data-page="backup" onclick="navigateTo('backup')">
                         <i class="fas fa-database"></i> Backup & Export
                     </button>
@@ -1584,6 +1588,7 @@ e<!DOCTYPE html>
                 estates: 'Estate Performance',
                 'hr-archive': 'HR Notes Archive',
                 search: 'Search Reports',
+                settings: 'Settings & Sync',
                 backup: 'Backup & Export'
             };
             document.getElementById('page-title').textContent = titleMap[page] || page;
@@ -1597,6 +1602,7 @@ e<!DOCTYPE html>
                 case 'estates': await renderEstates(container); break;
                 case 'hr-archive': await renderHRArchive(container); break;
                 case 'search': await renderSearch(container); break;
+                case 'settings': renderSettings(container); break;
                 case 'backup': renderBackup(container); break;
             }
 
@@ -2223,6 +2229,9 @@ e<!DOCTYPE html>
                 await Storage.save(report);
                 clearDraft();
                 Storage.autoBackup();
+                
+                // Auto-sync to GitHub if enabled
+                await autoSync();
 
                 // Build success summary
                 let summaryHtml = '';
@@ -2574,6 +2583,124 @@ e<!DOCTYPE html>
             Storage.autoBackup();
         }
 
+        function renderSettings(container) {
+            const githubSync = new GitHubSync();
+            const status = githubSync.getStatus();
+            
+            container.innerHTML = `
+                <div class="fade-in">
+                    <div class="section">
+                        <div class="section-header">
+                            <h3 class="section-title"><i class="fas fa-sync-alt"></i> GitHub Sync Configuration</h3>
+                            <span class="badge ${status.configured && status.enabled ? 'badge-green' : 'badge-gray'}">
+                                ${status.configured && status.enabled ? 'Active' : 'Inactive'}
+                            </span>
+                        </div>
+                        
+                        <div style="display:grid;gap:20px;max-width:700px">
+                            <!-- Status Card -->
+                            <div style="padding:20px;background:var(--bg);border-radius:10px;border-left:4px solid ${status.configured && status.enabled ? 'var(--success)' : 'var(--warning)'}">
+                                <h4 style="margin-bottom:12px"><i class="fas fa-info-circle"></i> Current Status</h4>
+                                <div style="display:grid;gap:8px;font-size:0.875rem">
+                                    <div><strong>Repository:</strong> ${status.repo}</div>
+                                    <div><strong>Configured:</strong> ${status.configured ? '✅ Yes' : '❌ No'}</div>
+                                    <div><strong>Sync Enabled:</strong> ${status.enabled ? '✅ Yes' : '❌ No'}</div>
+                                    <div><strong>User:</strong> ${status.userName}</div>
+                                    <div><strong>Last Sync:</strong> ${status.lastSync ? new Date(status.lastSync).toLocaleString('en-NG') : 'Never'}</div>
+                                </div>
+                            </div>
+
+                            <!-- Configuration Form -->
+                            <div style="padding:20px;background:var(--card);border-radius:10px;border:1px solid var(--border)">
+                                <h4 style="margin-bottom:16px"><i class="fas fa-key"></i> GitHub Personal Access Token</h4>
+                                <p style="font-size:0.875rem;color:var(--text-light);margin-bottom:16px">
+                                    To enable real-time collaboration, you need a GitHub Personal Access Token with <strong>repo</strong> permissions.
+                                    <a href="https://github.com/settings/tokens/new?scopes=repo&description=EstatePro%20Reporting" target="_blank" style="color:var(--primary)">
+                                        Create one here →
+                                    </a>
+                                </p>
+                                
+                                <div class="form-grid" style="grid-template-columns:1fr">
+                                    <div class="form-group">
+                                        <label>GitHub Token</label>
+                                        <input type="password" id="github-token" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" value="${status.configured ? '••••••••••••••••••••' : ''}">
+                                        <span class="hint">Your token is stored locally and never shared</span>
+                                    </div>
+                                    
+                                    <div class="form-group">
+                                        <label>Your Name</label>
+                                        <input type="text" id="github-username" placeholder="John Doe" value="${status.userName}">
+                                    </div>
+                                    
+                                    <div class="form-group">
+                                        <label>Your Email</label>
+                                        <input type="email" id="github-useremail" placeholder="john@example.com" value="${localStorage.getItem('github_user_email') || ''}">
+                                    </div>
+                                </div>
+                                
+                                <div style="display:flex;gap:12px;margin-top:16px">
+                                    <button class="btn btn-primary" onclick="saveGitHubConfig()">
+                                        <i class="fas fa-save"></i> Save Configuration
+                                    </button>
+                                    <button class="btn btn-secondary" onclick="testGitHubConnection()">
+                                        <i class="fas fa-plug"></i> Test Connection
+                                    </button>
+                                </div>
+                                
+                                <div id="connection-status" style="margin-top:12px"></div>
+                            </div>
+
+                            <!-- Sync Control -->
+                            ${status.configured ? `
+                            <div style="padding:20px;background:var(--primary-light);border-radius:10px;border:1px solid var(--primary)">
+                                <div style="display:flex;justify-content:space-between;align-items:center">
+                                    <div>
+                                        <h4 style="margin-bottom:8px"><i class="fas fa-toggle-on"></i> Enable Sync</h4>
+                                        <p style="font-size:0.875rem;color:var(--text-light)">When enabled, reports will sync to GitHub automatically</p>
+                                    </div>
+                                    <label style="cursor:pointer;display:flex;align-items:center;gap:10px">
+                                        <input type="checkbox" id="sync-toggle" ${status.enabled ? 'checked' : ''} onchange="toggleGitHubSync(this.checked)" style="width:20px;height:20px;cursor:pointer">
+                                        <span style="font-weight:600">${status.enabled ? 'ON' : 'OFF'}</span>
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <div style="padding:20px;background:var(--card);border-radius:10px;border:1px solid var(--border)">
+                                <h4 style="margin-bottom:12px"><i class="fas fa-sync"></i> Manual Sync Actions</h4>
+                                <div style="display:flex;gap:12px;flex-wrap:wrap">
+                                    <button class="btn btn-primary" onclick="pullFromGitHub()">
+                                        <i class="fas fa-download"></i> Pull from GitHub
+                                    </button>
+                                    <button class="btn btn-success" onclick="pushToGitHub()">
+                                        <i class="fas fa-upload"></i> Push to GitHub
+                                    </button>
+                                    <button class="btn btn-secondary" onclick="syncBidirectional()">
+                                        <i class="fas fa-sync-alt"></i> Full Sync
+                                    </button>
+                                </div>
+                                <p style="font-size:0.8rem;color:var(--text-light);margin-top:12px">
+                                    <i class="fas fa-info-circle"></i> Use these for manual control. Auto-sync happens when enabled.
+                                </p>
+                            </div>
+                            ` : ''}
+
+                            <!-- Help -->
+                            <div style="padding:20px;background:var(--bg);border-radius:10px">
+                                <h4 style="margin-bottom:12px"><i class="fas fa-question-circle"></i> How It Works</h4>
+                                <ul style="font-size:0.875rem;color:var(--text-light);padding-left:20px;display:grid;gap:8px">
+                                    <li>Configure your GitHub token once</li>
+                                    <li>Enable sync to automatically save reports to GitHub</li>
+                                    <li>All team members see the same data when they pull from GitHub</li>
+                                    <li>Reports sync in real-time across all devices</li>
+                                    <li>Your data is backed up safely in your GitHub repository</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
         function renderBackup(container) {
             const lastBackup = localStorage.getItem('estatepro_snapshot_time');
             container.innerHTML = `
@@ -2665,17 +2792,168 @@ e<!DOCTYPE html>
         }
 
         // ============================
+        // GITHUB SYNC FUNCTIONS
+        // ============================
+        let githubSyncInstance = null;
+
+        function saveGitHubConfig() {
+            const token = document.getElementById('github-token').value;
+            const userName = document.getElementById('github-username').value;
+            const userEmail = document.getElementById('github-useremail').value;
+
+            if (!token || token === '••••••••••••••••••••') {
+                showToast('Please enter a valid GitHub token', 'error');
+                return;
+            }
+
+            if (!userName || !userEmail) {
+                showToast('Please enter your name and email', 'error');
+                return;
+            }
+
+            githubSyncInstance = new GitHubSync();
+            githubSyncInstance.configure(token, userName, userEmail);
+            showToast('GitHub configuration saved successfully!', 'success');
+            renderPage('settings');
+        }
+
+        async function testGitHubConnection() {
+            const statusDiv = document.getElementById('connection-status');
+            statusDiv.innerHTML = '<div class="loading"></div> Testing connection...';
+
+            githubSyncInstance = new GitHubSync();
+            const result = await githubSyncInstance.testConnection();
+
+            if (result.success) {
+                statusDiv.innerHTML = `<div style="color:var(--success);font-size:0.875rem"><i class="fas fa-check-circle"></i> ${result.message}</div>`;
+            } else {
+                statusDiv.innerHTML = `<div style="color:var(--danger);font-size:0.875rem"><i class="fas fa-times-circle"></i> ${result.message}</div>`;
+            }
+        }
+
+        function toggleGitHubSync(enabled) {
+            githubSyncInstance = new GitHubSync();
+            githubSyncInstance.toggleSync(enabled);
+            showToast(enabled ? 'GitHub sync enabled' : 'GitHub sync disabled', enabled ? 'success' : 'info');
+            
+            if (enabled) {
+                // Perform initial sync when enabled
+                syncBidirectional();
+            }
+        }
+
+        async function pullFromGitHub() {
+            try {
+                showToast('Pulling reports from GitHub...', 'info');
+                githubSyncInstance = new GitHubSync();
+                const reports = await githubSyncInstance.pull();
+                
+                // Clear local database and load remote reports
+                await Storage.clear();
+                for (const report of reports) {
+                    await Storage.save(report);
+                }
+                
+                showToast(`Pulled ${reports.length} reports from GitHub`, 'success');
+                Storage.autoBackup();
+                renderPage(currentPage);
+            } catch (error) {
+                showToast('Pull failed: ' + error.message, 'error');
+            }
+        }
+
+        async function pushToGitHub() {
+            try {
+                showToast('Pushing reports to GitHub...', 'info');
+                githubSyncInstance = new GitHubSync();
+                const localReports = await Storage.getAll();
+                await githubSyncInstance.push(localReports, `Update reports - ${new Date().toLocaleString('en-NG')}`);
+                showToast(`Pushed ${localReports.length} reports to GitHub`, 'success');
+            } catch (error) {
+                showToast('Push failed: ' + error.message, 'error');
+            }
+        }
+
+        async function syncBidirectional() {
+            try {
+                showToast('Syncing with GitHub...', 'info');
+                githubSyncInstance = new GitHubSync();
+                const localReports = await Storage.getAll();
+                const mergedReports = await githubSyncInstance.sync(localReports);
+                
+                // Update local storage with merged data
+                await Storage.clear();
+                for (const report of mergedReports) {
+                    await Storage.save(report);
+                }
+                
+                showToast('Sync completed successfully!', 'success');
+                Storage.autoBackup();
+                renderPage(currentPage);
+            } catch (error) {
+                showToast('Sync failed: ' + error.message, 'error');
+            }
+        }
+
+        // Auto-sync on save (called after report submission)
+        async function autoSync() {
+            githubSyncInstance = new GitHubSync();
+            if (githubSyncInstance.syncEnabled) {
+                try {
+                    const localReports = await Storage.getAll();
+                    await githubSyncInstance.push(localReports, `Auto-sync: New report added - ${new Date().toLocaleString('en-NG')}`);
+                    console.log('Auto-sync completed');
+                } catch (error) {
+                    console.error('Auto-sync failed:', error);
+                }
+            }
+        }
+
+        // ============================
         // INITIALIZATION
         // ============================
         async function init() {
             try {
                 await Storage.init();
                 document.getElementById('db-status').innerHTML = '<i class="fas fa-check-circle"></i> Database Ready';
+                
+                // Check if GitHub sync is enabled and perform initial sync
+                githubSyncInstance = new GitHubSync();
+                if (githubSyncInstance.syncEnabled) {
+                    try {
+                        const localReports = await Storage.getAll();
+                        const mergedReports = await githubSyncInstance.sync(localReports);
+                        
+                        // Update local storage with merged data
+                        await Storage.clear();
+                        for (const report of mergedReports) {
+                            await Storage.save(report);
+                        }
+                        console.log('Initial sync completed');
+                    } catch (syncError) {
+                        console.warn('Initial sync failed:', syncError.message);
+                    }
+                }
+                
                 renderPage('dashboard');
 
                 // Auto backup interval
                 setInterval(() => Storage.autoBackup(), AUTO_BACKUP_INTERVAL);
                 Storage.autoBackup();
+                
+                // Auto-sync interval (every 5 minutes if enabled)
+                setInterval(async () => {
+                    githubSyncInstance = new GitHubSync();
+                    if (githubSyncInstance.syncEnabled) {
+                        try {
+                            const localReports = await Storage.getAll();
+                            await githubSyncInstance.sync(localReports);
+                            console.log('Periodic sync completed');
+                        } catch (error) {
+                            console.warn('Periodic sync failed:', error.message);
+                        }
+                    }
+                }, AUTO_BACKUP_INTERVAL);
             } catch (err) {
                 document.getElementById('db-status').innerHTML = '<i class="fas fa-times-circle"></i> DB Error';
                 showToast('Database initialization failed: ' + err.message, 'error');
