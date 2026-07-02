@@ -2896,12 +2896,22 @@ e<!DOCTYPE html>
         }
 
         // Auto-sync on save (called after report submission)
+        // Uses a bidirectional merge (pull remote, merge, push) so a new report
+        // never overwrites reports added by other devices.
         async function autoSync() {
             githubSyncInstance = new GitHubSync();
             if (githubSyncInstance.syncEnabled) {
                 try {
                     const localReports = await Storage.getAll();
-                    await githubSyncInstance.push(localReports, `Auto-sync: New report added - ${new Date().toLocaleString('en-NG')}`);
+                    const mergedReports = await githubSyncInstance.sync(localReports);
+
+                    // Persist merged result locally so this device also gets others' reports
+                    await Storage.clear();
+                    for (const report of mergedReports) {
+                        await Storage.save(report);
+                    }
+                    // Ensure our new report reaches remote even if merge count was unchanged
+                    await githubSyncInstance.push(mergedReports, `Auto-sync: New report added - ${new Date().toLocaleString('en-NG')}`);
                     console.log('Auto-sync completed');
                 } catch (error) {
                     console.error('Auto-sync failed:', error);
@@ -2947,7 +2957,16 @@ e<!DOCTYPE html>
                     if (githubSyncInstance.syncEnabled) {
                         try {
                             const localReports = await Storage.getAll();
-                            await githubSyncInstance.sync(localReports);
+                            const mergedReports = await githubSyncInstance.sync(localReports);
+
+                            // Only rewrite storage & re-render if remote had something new
+                            if (mergedReports.length !== localReports.length) {
+                                await Storage.clear();
+                                for (const report of mergedReports) {
+                                    await Storage.save(report);
+                                }
+                                renderPage(currentPage);
+                            }
                             console.log('Periodic sync completed');
                         } catch (error) {
                             console.warn('Periodic sync failed:', error.message);
